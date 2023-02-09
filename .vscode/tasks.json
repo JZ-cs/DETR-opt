@@ -1,0 +1,52 @@
+{
+    "version": "2.0.0",
+    "tasks": [{
+            "label": "compile",
+            "command": "g++",
+            "args": [
+                "-g",
+                "${file}",
+                "-o",
+                "${fileDirname}/${fileBasenameNoExtension}"
+            ],
+            "problemMatcher": {
+                "owner": "cpp",
+                "fileLocation": [
+                    "relative",
+                    "${workspaceRoot}"
+                ],
+                "pattern": {
+                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "nvcc",
+            "args":["-g","${file}","-o","${fileDirname}/${fileBasenameNoExtension}.out",
+                // include 头文件
+                "-I", "/usr/local/cuda-11.3/include",
+                "-I", "/usr/local/cuda-11.3/samples/common/inc",
+                // lib 库文件地址
+                "-L", "/usr/local/cuda/lib64",   
+                "-L", "/usr/local/cuda-11.3/samples/common/lib",  
+                "-l", "cudart",                           
+                "-l", "cublas",
+                "-l", "cudnn",
+                "-l", "curand",
+                "-D_MWAITXINTRIN_H_INCLUDED"  
+            ]
+        }
+    ]
+}
+
