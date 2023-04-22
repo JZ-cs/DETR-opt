@@ -41,7 +41,7 @@ def append_nvcc_threads(nvcc_extra_args):
         return nvcc_extra_args + ["--threads", "4"]
     return nvcc_extra_args
 
-this_dir = '/home/jz/DETR-opt'
+this_dir = '/home/jz/demo'
 fused_linear_sample_cuda = load(
     name="fused_linear_sample", 
     sources=[str(this_dir) + "/fused_linear_sample.cpp", 
@@ -61,7 +61,7 @@ fused_linear_sample_cuda = load(
                     "--use_fast_math",
                     "--ptxas-options=-v",
                     "-lineinfo",
-                    "-DCUTLASS_NVCC_ARCHS=80"
+                    # "-DCUTLASS_NVCC_ARCHS=80"
                 ]
                 + generator_flag
                 + cc_flag
@@ -78,7 +78,7 @@ W = 16
 s_len = H*W
 nheads = 16
 d_head = 64
-npoints = 9
+npoints = 8
 d = nheads * d_head
 len_q = 256
 
@@ -97,7 +97,7 @@ def sampling_torch(x: torch.Tensor, projw, samp_pts: torch.Tensor, attn_weights:
     samp_grids = 2 * samp_pts_ - 1
     # (B*nheads, d_head, H, W) and (B*nheads,len_q,npoints,2) -> (B*nheads, d_head, len_q, npoints) 
     res = F.grid_sample(x_, samp_grids, 
-                        mode='bilinear', padding_mode='zeros', align_corners=True)
+                        mode='bilinear', padding_mode='zeros', align_corners=False)
     #(B*nheads, d_head, len_q, npoints)->(B, nheads, d_head, len_q, npoints)->(B, len_q, nheads, d_head, npoints)
     res = res.view(B,nheads,d_head, len_q, npoints).permute(0, 3, 1, 2, 4)
 
@@ -110,18 +110,25 @@ def only_sample(x: torch.Tensor, projw: torch.Tensor, samp_pts: torch.Tensor, at
     output = fused_linear_sample_cuda.only_sample(x, projw, samp_pts, attn_weights, H, W)
     return output
 
+def only_sample_mhead(x: torch.Tensor, projw: torch.Tensor, samp_pts: torch.Tensor, attn_weights: torch.Tensor):
+    output = fused_linear_sample_cuda.only_sample_mhead(x, projw, samp_pts, attn_weights, H, W)
+    return output
+
 def only_sample_opt(x: torch.Tensor, projw: torch.Tensor, samp_pts: torch.Tensor, attn_weights: torch.Tensor):
     output = fused_linear_sample_cuda.only_sample_opt(x, projw, samp_pts, attn_weights, H, W)
     return output
 
-def test_cuda(func, x, projw, samp_pts, attn_weights, warmup=50, iters=50, ):
+def test_cuda(func, x, projw, samp_pts, attn_weights, warmup=100, iters=200, ):
     for _ in range(warmup):
         _ = func(x, projw, samp_pts, attn_weights)
 
+    tracktime.cpu_record_start('cuda')
     tracktime.cuda_record_start('cuda')
     for _ in range(iters):
         output_cuda = func(x, projw, samp_pts, attn_weights)
     _t = tracktime.cuda_record_end('cuda')
+    _t_cpu = tracktime.cpu_record_end('cuda')
+    print(f'Test CUDA, cpu record= {_t_cpu/iters:.3f}ms')
     return _t/iters, output_cuda
 
 def test_torch(func, x, projw, samp_pts, attn_weights, warmup=50, iters=50, ):
@@ -149,11 +156,13 @@ if __name__ == "__main__":
         .view(1, s_len, 1)
     x = x * x_offs
 
+    x = torch.randn((B, s_len, d), dtype=torch.float16, device = torch.device('cuda:0'))
+
     attn_weights = torch.ones((B, len_q, nheads, npoints), dtype=torch.float16, device=torch.device('cuda:0'))
 
-    attn_offs = torch.Tensor([i+1 for i in range(npoints)])\
+    attn_offs = torch.Tensor([i+1 for i in range(npoints*nheads)])\
         .to(dtype=torch.float16, device=torch.device('cuda:0'))\
-        .view(1,1,1,-1)
+        .view(1,1,nheads,npoints)
     attn_weights = attn_weights * attn_offs
 
     samp_pts = torch.ones((B, len_q, nheads, npoints, 2), dtype=torch.float16, device=torch.device('cuda:0'))
@@ -161,19 +170,42 @@ if __name__ == "__main__":
     samp_offs = torch.Tensor([i+1 for i in range(nheads*2)])\
         .to(dtype=torch.float16, device=torch.device('cuda:0'))\
         .view(1, 1, nheads, 1, -1)
-    samp_pts = samp_pts/samp_offs
+    samp_pts = samp_pts / samp_offs
     
-    # _t_cuda, res_cuda = test_cuda(only_sample, x, projw, samp_pts, attn_weights)
-    # print(f'sample-time= {_t_cuda}ms  res: shape:{res_cuda.shape} sum:{torch.sum(res_cuda)}\
+    _t_cuda, res_cuda = test_cuda(only_sample, x, projw, samp_pts, attn_weights)
+    print(f'sample-time= {_t_cuda:.5f}ms  res: shape:{res_cuda.shape} sum:{torch.sum(res_cuda):.5f}\
+         max:{torch.max(res_cuda):.5f} min:{torch.min(res_cuda):.5f}')
+    print(res_cuda[0,0,0,0], res_cuda[B-1, len_q-1, nheads-1, 0])
+
+
+    # x = x.float()
+    # samp_pts = samp_pts.float()
+    # attn_weights = attn_weights.float()
+    # _t_torch, res_torch = test_torch(sampling_torch, x, projw, samp_pts, attn_weights)
+    # print(f'torch-sample-time= {_t_torch:.5f}ms  res: shape:{res_torch.shape} sum:{torch.sum(res_torch):.5f}\
+    #      max:{torch.max(res_torch):.5f} min:{torch.min(res_torch):.5f}')
+    # print(res_torch[0,0,0,0], res_torch[B-1, len_q-1, nheads-1, 0])
+    # print(torch.max(torch.abs(res_cuda-res_torch)), torch.min(torch.abs(res_cuda-res_torch)))
+    # max_abs_v, idx_max = torch.max(torch.abs(res_cuda-res_torch), dim=3)
+    # min_abs_v, idx_min = torch.min(torch.abs(res_cuda-res_torch), dim=3)
+    # print(res_cuda[0,0,0,idx_max[0,0,0]], res_torch[0,0,0,idx_max[0,0,0]], ' - ', max_abs_v[0,0,0])
+
+    # _t_cuda, res_cuda = test_cuda(only_sample_opt, x, projw, samp_pts, attn_weights)
+    # print(f'sample-opt-time= {_t_cuda}ms  res: shape:{res_cuda.shape} sum:{torch.sum(res_cuda)}\
     #      max:{torch.max(res_cuda)} min:{torch.min(res_cuda)}')
     # print(res_cuda[0,0,0,0], res_cuda[B-1, len_q-1, nheads-1, 0])
 
-    _t_cuda, res_cuda = test_cuda(only_sample_opt, x, projw, samp_pts, attn_weights)
-    print(f'sample-opt-time= {_t_cuda}ms  res: shape:{res_cuda.shape} sum:{torch.sum(res_cuda)}\
-         max:{torch.max(res_cuda)} min:{torch.min(res_cuda)}')
-    print(res_cuda[0,0,0,0], res_cuda[B-1, len_q-1, nheads-1, 0])
+    # tracktime.cuda_record_start("shift-attn")
+    # titers = 100
+    # for i in range(titers):
+    #     res = attn_weights.permute(0,2,1,3).contiguous()
+    # _t = tracktime.cuda_record_end("shift-attn")
+    # print(f'{_t/titers:.6f}')
 
-    # _t_torch, res_torch = test_torch(sampling_torch, x, projw, samp_pts, attn_weights)
-    # print(f'torch-sample-time= {_t_torch}ms  res: shape:{res_torch.shape} sum:{torch.sum(res_torch)}\
-    #      max:{torch.max(res_torch)} min:{torch.min(res_torch)}')
-    # print(res_torch[0,0,0,0], res_torch[B-1, len_q-1, nheads-1, 0])
+
+    # _samp_pts = samp_pts.permute(0,2,1,3,4).contiguous()
+    # _attn_weights = attn_weights.permute(0,2,1,3).contiguous()
+    # _t_cuda, res_cuda = test_cuda(only_sample_mhead, x, projw, _samp_pts, _attn_weights)
+    # print(f'sample-mhead-time= {_t_cuda}ms  res: shape:{res_cuda.shape} sum:{torch.sum(res_cuda)}\
+    #      max:{torch.max(res_cuda)} min:{torch.min(res_cuda)}')
+    # print(res_cuda[0,0,0,0], res_cuda[B-1, len_q-1, nheads-1, 0])

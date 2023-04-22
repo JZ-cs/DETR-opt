@@ -1,2 +1,0 @@
-sample-time= 9.205227661132813ms  res: shape:torch.Size([512, 256, 16, 64]) sum:inf         max:6120.0 min:404.25
-tensor(6120., device='cuda:0', dtype=torch.float16) tensor(404.2500, device='cuda:0', dtype=torch.float16)

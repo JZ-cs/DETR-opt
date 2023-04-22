@@ -1,3 +1,4 @@
+import time
 import torch
 import torch.nn as nn
 def avgt(time_lis:list, tunit='ms'):
@@ -19,6 +20,8 @@ class TrackTime:
 
         self.start_event_dic = {}
         self.end_event_dic = {}
+
+        self.cpu_time_start_dic = {}
     
     def init__(self):
         self.is_forward = True
@@ -76,6 +79,18 @@ class TrackTime:
         torch.cuda.synchronize()
         _time = self.start_event_dic[kstr].elapsed_time(self.end_event_dic[kstr])
         return _time
+    
+    def cpu_record_start(self, kstr):
+        if(kstr not in self.cpu_time_start_dic.keys()):
+            self.cpu_time_start_dic[kstr] = 0.
+        torch.cuda.synchronize()
+        self.cpu_time_start_dic[kstr] = time.perf_counter_ns()
+    
+    def cpu_record_end(self, kstr):
+        torch.cuda.synchronize()
+        end_t = time.perf_counter_ns()
+        return (end_t - self.cpu_time_start_dic[kstr]) / 1e6
+        
 
     def search_module(self, mod:nn.Module, target):
         if(mod.__class__ == target):

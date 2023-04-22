@@ -1,0 +1,8 @@
+--------------------  sample configs  -------------------------
+<<<blocks, threads, shared_maxbytes=65536>>>
+threads:(32, 16, 1)
+BLOCK_COVER_HEADS=1, TH_DIM_CS_STRIDE=16 TH_DIM_READ_STRIDE=16
+-------------------------------------------------------
+Test CUDA, cpu record= 6.937ms
+sample-time= 6.88313ms  res: shape:torch.Size([512, 256, 16, 64]) sum:inf         max:2312.00000 min:-2178.00000
+tensor(62.1250, device='cuda:0', dtype=torch.float16) tensor(725.5000, device='cuda:0', dtype=torch.float16)
